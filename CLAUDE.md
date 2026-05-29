@@ -347,8 +347,28 @@ params:
 ```
 
 **Timeout and retry config** (already applied in VPS):
-- `runtime/node/agent/providers/openai_provider.py`: `timeout=90`, `max_retries=1`
-- `runtime/node/agent/providers/gemini_provider.py`: `timeout=90*1000`
+- `runtime/node/agent/providers/openai_provider.py`: `timeout=240`, `max_retries=1`
+- `runtime/node/agent/providers/gemini_provider.py`: `timeout=240*1000`
+- 240s needed for code generation nodes (Programmer Coding in ChatDev_v1.yaml)
+
+**Non-blocking SSE stream** (applied in `server/routes/execute_sync.py`):
+- Changed `queue.get(timeout=0.1)` → `queue.get_nowait()` + `await asyncio.sleep(0.05)`
+- Without this, the FastAPI event loop blocks during workflow execution and no other requests are served
+- Required `import asyncio` at top of file
+
+**DevAll frontend API base path** (applied in `frontend/src/utils/apiFunctions.js`):
+- All API calls prefixed with `import.meta.env.BASE_URL` (e.g. `/devall`)
+- Without this, browser fetches `/api/workflows` → Caddy sends to wrong handler
+
+**WS path base prefix** (applied in `frontend/src/pages/LaunchView.vue`):
+- WS connects to `${wsBase}/ws` instead of `/ws`
+- Required so Caddy routes `/devall/ws` → DevAll backend
+
+**SSE vs WS sessions — incompatible**:
+- Hive launches workflows via SSE (`POST /api/workflow/run` with `Accept: text/event-stream`)
+- DevAll UI uses WebSocket — `?session=` reconnect only works for WS-launched sessions
+- Cannot reconnect from DevAll UI to a Hive-dispatched run
+- Source of truth for Hive run logs: `/hive/runs`
 
 **Vite allowedHosts**
 `frontend/vite.config.js` must have `allowedHosts: true` (not `'all'`) for Vite 6+.
