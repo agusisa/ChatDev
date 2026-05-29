@@ -312,3 +312,50 @@ For Gemini workflows (image generation, multimodal): use `provider: gemini` with
 - **All workflow YAMLs**: replaced hardcoded `gpt-4o` / `gpt-4o-mini` / `gpt-4-turbo` with `${MODEL_NAME}`
 - **Gemini workflows** (`blender_*`, image gen): left untouched — they require Gemini
 - **Running via Docker Compose**: both services containerized with live bind-mount volumes for hot reload
+
+---
+
+## VPS Deployment (nogal-labs.com.ar/devall)
+
+Repo cloned at `/root/repos/devall` on Hostinger VPS (2.24.69.47).
+Docker Compose: `chatdev_backend` (:6400) + `chatdev_frontend` (:5173, bind-mount).
+Both are bind-mounted from `/root/repos/devall` — file edits on host take effect after container restart.
+
+```bash
+# Pull latest + restart
+cd /root/repos/devall
+GIT_SSH_COMMAND='ssh -i /root/.ssh/id_ed25519_github' git pull origin main
+docker restart chatdev_backend   # Python changes
+docker restart chatdev_frontend  # Vite config changes
+```
+
+### VPS-specific pitfalls
+
+**DevAll blocks HTTP while a workflow runs**
+The FastAPI backend becomes unresponsive (no new requests served) when a long workflow is running.
+`curl localhost:6400/api/workflow/sessions` will hang. Fix: `docker restart chatdev_backend`.
+This kills the active workflow — no graceful cancel exists for the HTTP-blocking case.
+
+**LLM provider: Anthropic compat via nogal-ai-backend**
+`.env` on VPS points to `http://172.17.0.1:3001` (nogal-ai-backend, OpenAI-compat).
+NEVER point `BASE_URL` directly to Anthropic from VPS containers — all tokens must go through nogal-ai-backend.
+Add `protocol: chat` in agent node `params` when using Anthropic compat to avoid Responses API errors:
+```yaml
+params:
+  protocol: chat
+  temperature: 0.7
+```
+
+**Timeout and retry config** (already applied in VPS):
+- `runtime/node/agent/providers/openai_provider.py`: `timeout=90`, `max_retries=1`
+- `runtime/node/agent/providers/gemini_provider.py`: `timeout=90*1000`
+
+**Vite allowedHosts**
+`frontend/vite.config.js` must have `allowedHosts: true` (not `'all'`) for Vite 6+.
+Without it, external hostnames like `nogal-labs.com.ar` are blocked with a 403.
+
+**Caddy routing** (nogal-labs.com.ar):
+```
+handle /devall* { reverse_proxy localhost:5173 }
+```
+The Vite dev server handles all `/devall/*` paths including the Vue app and `/api` proxy.
