@@ -1482,9 +1482,12 @@ const establishWebSocketConnection = (options = {}) => {
     }
   }
 
+  // Use base path prefix for WS so Caddy routes /devall/ws → :6400
+  const wsBase = (import.meta.env.BASE_URL || '/').replace(/\/$/, '') // e.g. /devall
+  const wsPath = `${wsBase}/ws`
   const wsUrl = reconnecting
-    ? `${scheme}//${host}/ws?session_id=${encodeURIComponent(reconnectSid)}`
-    : `${scheme}//${host}/ws`
+    ? `${scheme}//${host}${wsPath}?session_id=${encodeURIComponent(reconnectSid)}`
+    : `${scheme}//${host}${wsPath}`
   const socket = new WebSocket(wsUrl)
   ws = socket
 
