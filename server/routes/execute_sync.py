@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import queue
 import threading
@@ -293,9 +294,13 @@ async def run_workflow_sync(request: WorkflowRunRequest, http_request: Request):
     async def stream():
         while True:
             try:
-                event_type, data = event_queue.get(timeout=0.1)
+                event_type, data = event_queue.get_nowait()
                 yield _sse_event(event_type, data)
             except queue.Empty:
+                if done_event.is_set():
+                    break
+                # Yield control to event loop — don't block other requests
+                await asyncio.sleep(0.05)
                 if done_event.is_set():
                     break
 
