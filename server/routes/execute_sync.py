@@ -31,6 +31,40 @@ router = APIRouter()
 
 _SSE_CONTENT_TYPE = "text/event-stream"
 
+# Registry of active sync sessions: session_name -> cancel_event
+_active_sessions: dict[str, threading.Event] = {}
+_active_sessions_lock = threading.Lock()
+
+
+def _register_session(session_name: str) -> threading.Event:
+    cancel_event = threading.Event()
+    with _active_sessions_lock:
+        _active_sessions[session_name] = cancel_event
+    return cancel_event
+
+
+def _unregister_session(session_name: str) -> None:
+    with _active_sessions_lock:
+        _active_sessions.pop(session_name, None)
+
+
+@router.get("/api/workflow/sessions")
+async def list_active_sessions():
+    """List currently running sync workflow sessions."""
+    with _active_sessions_lock:
+        return {"sessions": list(_active_sessions.keys())}
+
+
+@router.delete("/api/workflow/run/{session_name}")
+async def cancel_workflow(session_name: str):
+    """Cancel a running sync workflow session."""
+    with _active_sessions_lock:
+        event = _active_sessions.get(session_name)
+    if event is None:
+        raise HTTPException(status_code=404, detail=f"Session '{session_name}' not found or already finished")
+    event.set()
+    return {"status": "cancel_requested", "session_name": session_name}
+
 
 def _normalize_session_name(yaml_path: Path, session_name: Optional[str]) -> str:
     if session_name and session_name.strip():
@@ -203,6 +237,13 @@ async def run_workflow_sync(request: WorkflowRunRequest, http_request: Request):
     event_queue: queue.Queue[tuple[str, Any]] = queue.Queue()
     done_event = threading.Event()
 
+    # Determine session name for registry
+    import re as _re
+    from datetime import datetime as _dt
+    _yaml_path_tmp = _resolve_yaml_path(request.yaml_file)
+    _session_name = request.session_name.strip() if (request.session_name and request.session_name.strip()) else f"sdk_{_yaml_path_tmp.stem}_{_dt.now().strftime('%Y%m%d%H%M%S')}"
+    cancel_event = _register_session(_session_name)
+
     def enqueue(event_type: str, data: Any) -> None:
         event_queue.put((event_type, data))
 
@@ -210,21 +251,28 @@ async def run_workflow_sync(request: WorkflowRunRequest, http_request: Request):
         try:
             enqueue(
                 "started",
-                {"yaml_file": request.yaml_file, "task_prompt": request.task_prompt},
+                {"yaml_file": request.yaml_file, "task_prompt": request.task_prompt, "session_name": _session_name},
             )
+            if cancel_event.is_set():
+                enqueue("error", {"message": "Cancelled before start"})
+                return
             final_message, meta = _run_workflow_with_logger(
                 yaml_file=request.yaml_file,
                 task_prompt=request.task_prompt,
                 attachments=request.attachments,
-                session_name=request.session_name,
+                session_name=_session_name,
                 variables=request.variables,
                 log_level=resolved_log_level,
                 log_callback=enqueue,
             )
+            if cancel_event.is_set():
+                enqueue("error", {"message": "Workflow cancelled"})
+                return
             enqueue(
                 "completed",
                 {
                     "status": "completed",
+                    "session_name": _session_name,
                     "final_message": final_message.text_content() if final_message else "",
                     "token_usage": meta["token_usage"],
                     "output_dir": str(meta["output_dir"].resolve()),
@@ -237,6 +285,7 @@ async def run_workflow_sync(request: WorkflowRunRequest, http_request: Request):
             logger.log_exception(exc, "Failed to run workflow via streaming API")
             enqueue("error", {"message": f"Failed to run workflow: {exc}"})
         finally:
+            _unregister_session(_session_name)
             done_event.set()
 
     threading.Thread(target=worker, daemon=True).start()
