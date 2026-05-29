@@ -196,7 +196,7 @@ class OpenAIProvider(ModelProvider):
             "model": self.model_name,
             "input": input_messages,
             "temperature": params.pop("temperature", 0.7),
-            "timeout": params.pop("timeout", 300),  # 5 min
+            "timeout": params.pop("timeout", 240),  # 4min — enough for code gen; async fix prevents event loop blocking
         }
         if max_output_tokens is not None:
             payload["max_output_tokens"] = max_output_tokens
