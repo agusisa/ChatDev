@@ -1,5 +1,7 @@
 
-const apiUrl = (path) => path
+// Build API URL respecting the Vite base path (e.g. /devall/ in production)
+const _base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '') // strip trailing slash
+const apiUrl = (path) => `${_base}${path}`
 
 const addYamlSuffix = (filename) => {
   const trimmed = (filename || '').trim()
